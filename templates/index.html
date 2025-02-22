@@ -5,68 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hệ thống giám sát phương tiện</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
             text-align: center;
             background-color: #f4f4f4;
+            padding: 20px;
         }
         h1 {
             color: #007bff;
+            margin-bottom: 10px;
         }
         #image-container {
-            margin-top: 20px;
+            margin: 15px auto;
+            max-width: 600px;
         }
         #vehicle-image {
             display: none;
             max-width: 100%;
-            border: 5px solid #007bff;
+            height: auto;
+            border: 4px solid #007bff;
+            border-radius: 10px;
         }
         #alert {
-            font-size: 20px;
-            color: #007bff;
+            font-size: 18px;
+            color: #ff0000;
             font-weight: bold;
             display: none;
+            margin-bottom: 10px;
         }
         #chart-container {
-            width: 60%;
-            margin: 20px auto;
+            width: 80%;
+            max-width: 900px;
+            margin: 0 auto;
             background: white;
-            padding: 10px;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
-            display: none;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
         }
         canvas {
-            max-width: 100%;
+            min-width: 500px;
             height: 300px !important;
-        }
-        #toggle-chart-btn {
-            margin-top: 10px;
-            padding: 10px 20px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        #toggle-chart-btn:hover {
-            background-color: #0056b3;
         }
     </style>
 </head>
 <body>
     <h1>🚗 HỆ THỐNG GIÁM SÁT PHƯƠNG TIỆN 🚗</h1>
+
     <div id="alert">PHÁT HIỆN PHƯƠNG TIỆN!</div>
+
     <div id="image-container">
         <img id="vehicle-image" src="" alt="Hình ảnh phương tiện">
     </div>
-    <button id="toggle-chart-btn">📊 Hiển thị biểu đồ</button>
+
     <div id="chart-container">
-        <h2>📊 Biểu đồ phương tiện</h2>
         <canvas id="vehicleChart"></canvas>
     </div>
+
     <script>
         function updateImage() {
             const img = document.getElementById('vehicle-image');
@@ -85,75 +80,81 @@
 
         const ctx = document.getElementById('vehicleChart').getContext('2d');
         let vehicleChart = new Chart(ctx, {
-            type: 'line',
+            type: 'bar',
             data: {
                 labels: [],
-                datasets: [{
-                    label: 'Trạng thái phương tiện (1: Có xe, 0: Không có xe)',
-                    data: [],
-                    borderColor: '#007bff',
-                    backgroundColor: 'rgba(0, 123, 255, 0.5)',
-                    fill: true,
-                    tension: 0.2
-                }]
+                datasets: []
             },
             options: {
                 responsive: true,
-                plugins: {
-                    zoom: {
-                        pan: {
-                            enabled: true,
-                            mode: 'x',
-                        },
-                        zoom: {
-                            wheel: { enabled: true },
-                            pinch: { enabled: true },
-                            mode: 'x',
-                        }
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        stacked: false,
+                        title: { display: true, text: "Thời gian (Mỗi ảnh là 1 cụm cột)" },
+                        ticks: { autoSkip: false }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: "Số lượng phương tiện" }
                     }
                 },
-                scales: {
-                    x: { title: { display: true, text: "Thời gian" } },
-                    y: { title: { display: true, text: "Trạng thái phương tiện" }, min: 0, max: 1 }
+                plugins: {
+                    legend: { position: 'top' }
                 }
             }
         });
 
-        async function fetchChartData() {
-            try {
-                const response = await fetch('/get_chart_data');
-                if (!response.ok) throw new Error('Lỗi khi tải dữ liệu');
-                const data = await response.json();
+        function updateChart() {
+            fetch('/get_chart_data')
+                .then(response => response.json())
+                .then(data => {
+                    if (!data || Object.keys(data).length === 0) {
+                        console.warn("⚠️ Không có dữ liệu để hiển thị.");
+                        return;
+                    }
 
-                if (data.timestamps.length !== data.vehicle_status.length) {
-                    console.error("Dữ liệu timestamps và vehicle_status không khớp!");
-                    return;
-                }
+                    let labels = Object.keys(data);
+                    let datasets = [];
+                    let vehicleTypes = new Set();
 
-                data.timestamps.reverse();
-                data.vehicle_status.reverse();
+                    if (!labels.length) {
+                        console.error("🚨 Dữ liệu API bị thiếu.");
+                        return;
+                    }
 
-                vehicleChart.data.labels = data.timestamps.map(ts => ts.slice(11));
-                vehicleChart.data.datasets[0].data = data.vehicle_status;
-                vehicleChart.update();
-            } catch (error) {
-                console.error('Lỗi tải dữ liệu biểu đồ:', error);
-            }
+                    labels.forEach(time => {
+                        if (data[time]) {
+                            Object.keys(data[time]).forEach(type => vehicleTypes.add(type));
+                        }
+                    });
+
+                    const colorMap = {
+                        "ô tô": "#FF5733",
+                        "xe máy": "#33FF57",
+                        "xe tải": "#3385FF",
+                        "xe buýt": "#FFD700",
+                    };
+
+                    vehicleTypes.forEach(type => {
+                        let dataset = {
+                            label: type,
+                            data: labels.map(time => data[time][type] || 0),
+                            backgroundColor: colorMap[type] || "#A9A9A9"
+                        };
+                        datasets.push(dataset);
+                    });
+
+                    vehicleChart.data.labels = labels;
+                    vehicleChart.data.datasets = datasets;
+                    vehicleChart.update();
+                })
+                .catch(error => console.error('🚨 Lỗi khi lấy dữ liệu:', error));
         }
 
-        fetchChartData();
-        setInterval(fetchChartData, 5000);
+        setInterval(updateChart, 5000);
+        updateChart();
 
-        document.getElementById("toggle-chart-btn").addEventListener("click", function() {
-            let chartContainer = document.getElementById("chart-container");
-            if (chartContainer.style.display === "none") {
-                chartContainer.style.display = "block";
-                this.textContent = "📉 Ẩn biểu đồ";
-            } else {
-                chartContainer.style.display = "none";
-                this.textContent = "📊 Hiển thị biểu đồ";
-            }
-        });
     </script>
 </body>
 </html>
