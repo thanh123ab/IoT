@@ -25,20 +25,12 @@ conn = mysql.connector.connect(
 cursor = conn.cursor()
 
 # Cấu hình MQTT
-<<<<<<< HEAD
 MQTT_BROKER = "192.168.1.41"
-=======
-MQTT_BROKER = "192.168.1.13"
->>>>>>> 99cf668a8f16580d561c6bd4e49262660f75efdc
 MQTT_PORT = 1883
 MQTT_TOPIC = "img"
 
 # Load mô hình YOLOv8
-<<<<<<< HEAD
 model = YOLO(r'C:\Users\Asus\PycharmProjects\IotT\best.pt')
-=======
-model = YOLO(r'C:\Users\Asus\PycharmProjects\IotT\train3\weights\best.pt')
->>>>>>> 99cf668a8f16580d561c6bd4e49262660f75efdc
 model.eval()
 
 # Biến toàn cục
