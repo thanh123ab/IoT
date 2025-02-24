@@ -7,14 +7,14 @@ import torch
 from flask import Flask, render_template, Response, jsonify
 from datetime import datetime
 import mysql.connector
-from sympy import false
-from ultralytics import YOLO
+from collections import Counter
 from flask_cors import CORS
+from ultralytics import YOLO
 
 app = Flask(__name__)
 CORS(app)
 
-# 🔧 Kết nối MySQL
+# Kết nối MySQL
 conn = mysql.connector.connect(
     host="quanlybaido.duckdns.org",
     port="3306",
@@ -24,20 +24,19 @@ conn = mysql.connector.connect(
 )
 cursor = conn.cursor()
 
-# 🔧 Cấu hình MQTT
-MQTT_BROKER = "192.168.1.13"
+# Cấu hình MQTT
+MQTT_BROKER = "192.168.1.41"
 MQTT_PORT = 1883
 MQTT_TOPIC = "img"
 
-# Load mô hình YOLOv8 nhận diện phương tiện
-model = YOLO(r'C:\Users\Asus\PycharmProjects\IotT\train3\weights\best.pt')
+# Load mô hình YOLOv8
+model = YOLO(r'C:\Users\Asus\PycharmProjects\IotT\best.pt')
 model.eval()
 
-# Biến toàn cục lưu ảnh từ MQTT
+# Biến toàn cục
 image_data = {}
 total_parts = None
 latest_image = None
-
 
 def fix_base64_padding(base64_string):
     missing_padding = len(base64_string) % 4
@@ -45,33 +44,38 @@ def fix_base64_padding(base64_string):
         base64_string += "=" * (4 - missing_padding)
     return base64_string
 
-
 def detect_vehicle(image):
     global latest_image
-    results = model(image)  # Nhận diện phương tiện
+    results = model(image)
     image_cv = results[0].plot()
 
-    vehicle_detected = any(cls in [0, 1, 2, 3] for _, _, _, _, _, cls in results[0].boxes.data.tolist())
+    detected_vehicles = [int(cls) for _, _, _, _, _, cls in results[0].boxes.data.tolist()]
+    vehicle_count = Counter(detected_vehicles)
+    vehicle_detected = int(bool(vehicle_count))
+
+    vehicle_map = {0: "ô tô", 1: "xe máy", 2: "xe tải", 3: "xe buýt"}
+    detected_vehicle_data = [(vehicle_map.get(cls, "khác"), count) for cls, count in vehicle_count.items()]
 
     _, buffer = cv2.imencode('.jpg', image_cv)
     latest_image = buffer.tobytes()
 
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # 📌 Lưu dữ liệu vào MySQL
     try:
-        cursor.execute("INSERT INTO dem_xe (data_xe, times) VALUES (%s, %s)", (int(vehicle_detected), current_time))
+        for loai_xe, so_luong in detected_vehicle_data:
+            cursor.execute("""
+                INSERT INTO dem_xe (data_xe, loai_xe, so_luong, times)
+                VALUES (%s, %s, %s, %s)
+            """, (vehicle_detected, loai_xe, so_luong, current_time))
         conn.commit()
-        print(f"🚗 Đã lưu vào MySQL: {int(vehicle_detected)} - {current_time}")
+        print(f"🚗 Đã lưu vào MySQL: {detected_vehicle_data} - {current_time}")
     except Exception as e:
         print(f"❌ Lỗi khi lưu vào MySQL: {e}")
 
     return vehicle_detected
 
-
 def on_message(client, userdata, msg):
     global image_data, latest_image, total_parts
-
     message = msg.payload.decode()
 
     if message == "end":
@@ -79,7 +83,6 @@ def on_message(client, userdata, msg):
             try:
                 full_image_data = "".join(image_data[i] for i in sorted(image_data.keys()))
                 full_image_data = fix_base64_padding(full_image_data)
-
                 image_bytes = base64.b64decode(full_image_data)
                 np_arr = np.frombuffer(image_bytes, np.uint8)
                 current_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -87,10 +90,8 @@ def on_message(client, userdata, msg):
                 if current_image is not None:
                     print("🚗 Ảnh nhận thành công! Chạy nhận diện phương tiện...")
                     detect_vehicle(current_image)
-
             except Exception as e:
                 print(f"❌ Lỗi khi xử lý ảnh: {e}")
-
         image_data.clear()
         total_parts = None
     else:
@@ -102,29 +103,39 @@ def on_message(client, userdata, msg):
         except Exception as e:
             print(f"❌ Lỗi khi xử lý phần ảnh: {e}")
 
-
 client = mqtt.Client()
 client.on_message = on_message
 client.connect(MQTT_BROKER, MQTT_PORT, 60)
 client.subscribe(MQTT_TOPIC)
 client.loop_start()
 
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
-
 @app.route('/get_chart_data')
 def get_chart_data():
-    cursor.execute("SELECT times, data_xe FROM dem_xe ORDER BY times DESC LIMIT 50")
+    cursor.execute("""
+        SELECT times, loai_xe, SUM(so_luong) 
+        FROM dem_xe
+        WHERE times >= NOW() - INTERVAL 1 HOUR
+        GROUP BY times, loai_xe
+        ORDER BY times DESC
+        LIMIT 50
+    """)
     data = cursor.fetchall()
 
-    timestamps = [row[0].strftime("%Y-%m-%d %H:%M:%S") for row in data]
-    vehicle_status = [row[1] for row in data]
+    if not data:  # Nếu không có dữ liệu, trả về mảng rỗng
+        return jsonify([])
 
-    return jsonify({"timestamps": timestamps, "vehicle_status": vehicle_status})
+    chart_data = {}
+    for times, loai_xe, so_luong in data:
+        times_str = times.strftime('%H:%M:%S')  # Chuyển thời gian sang string
+        if times_str not in chart_data:
+            chart_data[times_str] = {}
+        chart_data[times_str][loai_xe] = so_luong
 
+    return jsonify(chart_data)  # Trả về dữ liệu JSON đúng định dạng
 
 def generate():
     global latest_image
@@ -134,11 +145,9 @@ def generate():
                    b'Content-Type: image/jpeg\r\n\r\n' + latest_image + b'\r\n')
         time.sleep(0.1)
 
-
 @app.route('/esp_feed')
 def esp_feed():
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
